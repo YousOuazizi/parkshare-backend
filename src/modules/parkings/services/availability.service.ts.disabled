@@ -1,0 +1,498 @@
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Parking } from '../entities/parking.entity';
+import { AvailabilitySchedule, DayOfWeek } from '../entities/availability-schedule.entity';
+import { AvailabilityException } from '../entities/availability-exception.entity';
+import { BookingsService } from '../../bookings/bookings.service';
+import { BookingStatus } from '../../bookings/entities/booking.entity';
+import { AppLoggerService } from '../../../core/logger/logger.service';
+
+export interface TimeSlot {
+  start: string; // HH:MM format
+  end: string;   // HH:MM format
+}
+
+export interface AvailabilityResult {
+  isAvailable: boolean;
+  reason?: string;
+  availableSlots?: TimeSlot[];
+  conflictingBookings?: string[];
+}
+
+@Injectable()
+export class AvailabilityService {
+  constructor(
+    @InjectRepository(Parking)
+    private parkingsRepository: Repository<Parking>,
+    @InjectRepository(AvailabilitySchedule)
+    private scheduleRepository: Repository<AvailabilitySchedule>,
+    @InjectRepository(AvailabilityException)
+    private exceptionRepository: Repository<AvailabilityException>,
+    @Inject(forwardRef(() => BookingsService))
+    private bookingsService: BookingsService,
+    private logger: AppLoggerService,
+  ) {}
+
+  /**
+   * Check comprehensive availability for a parking spot during a specific time period
+   */
+  async checkAvailability(
+    parkingId: string,
+    startDateTime: Date,
+    endDateTime: Date,
+    excludeBookingId?: string
+  ): Promise<AvailabilityResult> {
+    try {
+      // Validate input parameters
+      if (startDateTime >= endDateTime) {
+        return {
+          isAvailable: false,
+          reason: 'Start time must be before end time',
+        };
+      }
+
+      if (startDateTime < new Date()) {
+        return {
+          isAvailable: false,
+          reason: 'Cannot book in the past',
+        };
+      }
+
+      // Load parking with all availability data
+      const parking = await this.parkingsRepository.findOne({
+        where: { id: parkingId },
+        relations: [
+          'availabilitySchedules',
+          'availabilitySchedules.timeSlots',
+          'availabilityExceptions',
+          'availabilityExceptions.timeSlots',
+        ],
+      });
+
+      if (!parking) {
+        return {
+          isAvailable: false,
+          reason: 'Parking not found',
+        };
+      }
+
+      if (!parking.isActive) {
+        return {
+          isAvailable: false,
+          reason: 'Parking is not active',
+        };
+      }
+
+      // Check if the requested time spans multiple days
+      const startDate = new Date(startDateTime);
+      const endDate = new Date(endDateTime);
+      
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(0, 0, 0, 0);
+      
+      if (startDate.getTime() !== endDate.getTime()) {
+        return await this.checkMultiDayAvailability(
+          parking,
+          startDateTime,
+          endDateTime,
+          excludeBookingId
+        );
+      }
+
+      // Check single day availability
+      return await this.checkSingleDayAvailability(
+        parking,
+        startDateTime,
+        endDateTime,
+        excludeBookingId
+      );
+    } catch (error) {
+      this.logger.error('Error checking availability', {
+        parkingId,
+        startDateTime,
+        endDateTime,
+        error: error.message,
+      }, error);
+
+      return {
+        isAvailable: false,
+        reason: 'Error checking availability',
+      };
+    }
+  }
+
+  /**
+   * Check availability for a single day
+   */
+  private async checkSingleDayAvailability(
+    parking: Parking,
+    startDateTime: Date,
+    endDateTime: Date,
+    excludeBookingId?: string
+  ): Promise<AvailabilityResult> {
+    const dateString = startDateTime.toISOString().split('T')[0];
+    
+    // Step 1: Check for availability exceptions for this specific date
+    const exception = parking.availabilityExceptions?.find(
+      e => e.date === dateString
+    );
+
+    if (exception) {
+      if (!exception.available) {
+        return {
+          isAvailable: false,
+          reason: 'Parking is closed on this date (exception)',
+        };
+      }
+
+      // Check exception time slots
+      const exceptionResult = this.checkTimeSlots(
+        exception.timeSlots || [],
+        startDateTime,
+        endDateTime
+      );
+
+      if (!exceptionResult.isAvailable) {
+        return exceptionResult;
+      }
+    } else {
+      // Step 2: Check regular schedule for this day of week
+      const dayOfWeek = this.getDayOfWeek(startDateTime);
+      const schedule = parking.availabilitySchedules?.find(
+        s => s.dayOfWeek === dayOfWeek
+      );
+
+      if (!schedule || !schedule.timeSlots || schedule.timeSlots.length === 0) {
+        return {
+          isAvailable: false,
+          reason: 'Parking is not available on this day of the week',
+        };
+      }
+
+      const scheduleResult = this.checkTimeSlots(
+        schedule.timeSlots,
+        startDateTime,
+        endDateTime
+      );
+
+      if (!scheduleResult.isAvailable) {
+        return scheduleResult;
+      }
+    }
+
+    // Step 3: Check for conflicting bookings
+    const bookingConflicts = await this.checkBookingConflicts(
+      parking.id,
+      startDateTime,
+      endDateTime,
+      excludeBookingId
+    );
+
+    if (bookingConflicts.length > 0) {
+      return {
+        isAvailable: false,
+        reason: 'Time slot conflicts with existing bookings',
+        conflictingBookings: bookingConflicts,
+      };
+    }
+
+    return {
+      isAvailable: true,
+    };
+  }
+
+  /**
+   * Check availability across multiple days
+   */
+  private async checkMultiDayAvailability(
+    parking: Parking,
+    startDateTime: Date,
+    endDateTime: Date,
+    excludeBookingId?: string
+  ): Promise<AvailabilityResult> {
+    const currentDate = new Date(startDateTime);
+    const endDate = new Date(endDateTime);
+
+    while (currentDate <= endDate) {
+      let dayStart: Date;
+      let dayEnd: Date;
+
+      if (currentDate.toDateString() === startDateTime.toDateString()) {
+        // First day: from start time to end of day
+        dayStart = new Date(startDateTime);
+        dayEnd = new Date(currentDate);
+        dayEnd.setHours(23, 59, 59, 999);
+        
+        // If booking ends on the same day, use actual end time
+        if (currentDate.toDateString() === endDateTime.toDateString()) {
+          dayEnd = new Date(endDateTime);
+        }
+      } else if (currentDate.toDateString() === endDateTime.toDateString()) {
+        // Last day: from start of day to end time
+        dayStart = new Date(currentDate);
+        dayStart.setHours(0, 0, 0, 0);
+        dayEnd = new Date(endDateTime);
+      } else {
+        // Middle days: full day
+        dayStart = new Date(currentDate);
+        dayStart.setHours(0, 0, 0, 0);
+        dayEnd = new Date(currentDate);
+        dayEnd.setHours(23, 59, 59, 999);
+      }
+
+      const dayResult = await this.checkSingleDayAvailability(
+        parking,
+        dayStart,
+        dayEnd,
+        excludeBookingId
+      );
+
+      if (!dayResult.isAvailable) {
+        return {
+          isAvailable: false,
+          reason: `Not available on ${currentDate.toDateString()}: ${dayResult.reason}`,
+          conflictingBookings: dayResult.conflictingBookings,
+        };
+      }
+
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    return {
+      isAvailable: true,
+    };
+  }
+
+  /**
+   * Check if requested time fits within available time slots
+   */
+  private checkTimeSlots(
+    timeSlots: any[],
+    startDateTime: Date,
+    endDateTime: Date
+  ): AvailabilityResult {
+    if (!timeSlots || timeSlots.length === 0) {
+      return {
+        isAvailable: false,
+        reason: 'No time slots available',
+      };
+    }
+
+    const requestStart = this.getTimeString(startDateTime);
+    const requestEnd = this.getTimeString(endDateTime);
+
+    for (const slot of timeSlots) {
+      if (requestStart >= slot.startTime && requestEnd <= slot.endTime) {
+        return {
+          isAvailable: true,
+        };
+      }
+    }
+
+    return {
+      isAvailable: false,
+      reason: 'Requested time is outside available hours',
+      availableSlots: timeSlots.map(slot => ({
+        start: slot.startTime,
+        end: slot.endTime,
+      })),
+    };
+  }
+
+  /**
+   * Check for conflicting bookings
+   */
+  private async checkBookingConflicts(
+    parkingId: string,
+    startDateTime: Date,
+    endDateTime: Date,
+    excludeBookingId?: string
+  ): Promise<string[]> {
+    try {
+      const conflictingBookings = await this.bookingsService.findConflictingBookings(
+        parkingId,
+        startDateTime,
+        endDateTime,
+        [BookingStatus.CONFIRMED, BookingStatus.PENDING],
+        excludeBookingId
+      );
+
+      return conflictingBookings.map(booking => booking.id);
+    } catch (error) {
+      this.logger.error('Error checking booking conflicts', {
+        parkingId,
+        startDateTime,
+        endDateTime,
+        error: error.message,
+      }, error);
+      
+      // In case of error, assume there might be conflicts for safety
+      return ['error-checking-conflicts'];
+    }
+  }
+
+  /**
+   * Get available time slots for a specific date
+   */
+  async getAvailableSlots(
+    parkingId: string,
+    date: Date,
+    slotDurationMinutes = 60
+  ): Promise<TimeSlot[]> {
+    const parking = await this.parkingsRepository.findOne({
+      where: { id: parkingId },
+      relations: [
+        'availabilitySchedules',
+        'availabilitySchedules.timeSlots',
+        'availabilityExceptions',
+        'availabilityExceptions.timeSlots',
+      ],
+    });
+
+    if (!parking) {
+      return [];
+    }
+
+    const dateString = date.toISOString().split('T')[0];
+    let availableSlots: TimeSlot[] = [];
+
+    // Check for exceptions first
+    const exception = parking.availabilityExceptions?.find(
+      e => e.date === dateString
+    );
+
+    if (exception) {
+      if (!exception.available) {
+        return [];
+      }
+      availableSlots = exception.timeSlots?.map(slot => ({
+        start: slot.startTime,
+        end: slot.endTime,
+      })) || [];
+    } else {
+      // Use regular schedule
+      const dayOfWeek = this.getDayOfWeek(date);
+      const schedule = parking.availabilitySchedules?.find(
+        s => s.dayOfWeek === dayOfWeek
+      );
+
+      if (!schedule) {
+        return [];
+      }
+
+      availableSlots = schedule.timeSlots?.map(slot => ({
+        start: slot.startTime,
+        end: slot.endTime,
+      })) || [];
+    }
+
+    // Get existing bookings for this date
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const existingBookings = await this.bookingsService.findConflictingBookings(
+      parkingId,
+      startOfDay,
+      endOfDay,
+      [BookingStatus.CONFIRMED, BookingStatus.PENDING]
+    );
+
+    // Remove booked time slots
+    const bookedSlots = existingBookings.map(booking => ({
+      start: this.getTimeString(booking.startTime),
+      end: this.getTimeString(booking.endTime),
+    }));
+
+    // Generate available time slots by removing booked ones
+    return this.subtractTimeSlots(availableSlots, bookedSlots, slotDurationMinutes);
+  }
+
+  /**
+   * Subtract booked slots from available slots
+   */
+  private subtractTimeSlots(
+    availableSlots: TimeSlot[],
+    bookedSlots: TimeSlot[],
+    minSlotDuration: number
+  ): TimeSlot[] {
+    const result: TimeSlot[] = [];
+
+    for (const available of availableSlots) {
+      let currentStart = available.start;
+      const availableEnd = available.end;
+
+      // Sort booked slots that overlap with this available slot
+      const overlappingBooked = bookedSlots
+        .filter(booked => 
+          this.timeSlotsOverlap(available, booked)
+        )
+        .sort((a, b) => a.start.localeCompare(b.start));
+
+      for (const booked of overlappingBooked) {
+        // Add slot before booked period if it's long enough
+        if (currentStart < booked.start) {
+          const duration = this.getTimeDifferenceMinutes(currentStart, booked.start);
+          if (duration >= minSlotDuration) {
+            result.push({
+              start: currentStart,
+              end: booked.start,
+            });
+          }
+        }
+
+        // Move current start to after booked period
+        currentStart = booked.end > currentStart ? booked.end : currentStart;
+      }
+
+      // Add remaining slot if it's long enough
+      if (currentStart < availableEnd) {
+        const duration = this.getTimeDifferenceMinutes(currentStart, availableEnd);
+        if (duration >= minSlotDuration) {
+          result.push({
+            start: currentStart,
+            end: availableEnd,
+          });
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Helper methods
+   */
+  private getDayOfWeek(date: Date): DayOfWeek {
+    const dayMap = {
+      0: DayOfWeek.SUNDAY,
+      1: DayOfWeek.MONDAY,
+      2: DayOfWeek.TUESDAY,
+      3: DayOfWeek.WEDNESDAY,
+      4: DayOfWeek.THURSDAY,
+      5: DayOfWeek.FRIDAY,
+      6: DayOfWeek.SATURDAY,
+    };
+    return dayMap[date.getDay()];
+  }
+
+  private getTimeString(date: Date): string {
+    return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+  }
+
+  private timeSlotsOverlap(slot1: TimeSlot, slot2: TimeSlot): boolean {
+    return slot1.start < slot2.end && slot2.start < slot1.end;
+  }
+
+  private getTimeDifferenceMinutes(startTime: string, endTime: string): number {
+    const [startHour, startMin] = startTime.split(':').map(Number);
+    const [endHour, endMin] = endTime.split(':').map(Number);
+    
+    const startMinutes = startHour * 60 + startMin;
+    const endMinutes = endHour * 60 + endMin;
+    
+    return endMinutes - startMinutes;
+  }
+}
