@@ -6,6 +6,10 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { User } from '../src/modules/users/entities/user.entity';
 import { Repository } from 'typeorm';
 
+// Helper to generate unique email
+const uniqueEmail = (prefix: string) =>
+  `${prefix}-${Date.now()}-${Math.random().toString(36).substring(7)}@example.com`;
+
 describe('AuthController (e2e)', () => {
   let app: INestApplication;
   let userRepository: Repository<User>;
@@ -44,7 +48,7 @@ describe('AuthController (e2e)', () => {
       return request(app.getHttpServer())
         .post('/api/auth/register')
         .send({
-          email: `test${Date.now()}@example.com`,
+          email: uniqueEmail('test'),
           password: 'StrongPassword123!',
           firstName: 'Test',
           lastName: 'User',
@@ -85,7 +89,7 @@ describe('AuthController (e2e)', () => {
     });
 
     it('should return 409 for duplicate email', async () => {
-      const email = `duplicate${Date.now()}@example.com`;
+      const email = uniqueEmail('duplicate');
 
       // First registration
       await request(app.getHttpServer()).post('/api/auth/register').send({
@@ -110,7 +114,7 @@ describe('AuthController (e2e)', () => {
 
   describe('/api/auth/login (POST)', () => {
     it('should login with correct credentials', async () => {
-      const email = `logintest${Date.now()}@example.com`;
+      const email = uniqueEmail('logintest');
       const password = 'LoginPassword123!';
 
       // Create a test user
@@ -143,7 +147,7 @@ describe('AuthController (e2e)', () => {
     });
 
     it('should return 401 for incorrect password', async () => {
-      const email = `wrongpwd${Date.now()}@example.com`;
+      const email = uniqueEmail('wrongpwd');
 
       // Create user first
       await request(app.getHttpServer())
@@ -183,7 +187,7 @@ describe('AuthController (e2e)', () => {
       const registerRes = await request(app.getHttpServer())
         .post('/api/auth/register')
         .send({
-          email: `profile${Date.now()}@example.com`,
+          email: uniqueEmail('profile'),
           password: 'ProfilePassword123!',
           firstName: 'Profile',
           lastName: 'Test',
@@ -222,7 +226,7 @@ describe('AuthController (e2e)', () => {
       const registerRes = await request(app.getHttpServer())
         .post('/api/auth/register')
         .send({
-          email: `logout${Date.now()}@example.com`,
+          email: uniqueEmail('logout'),
           password: 'LogoutPassword123!',
           firstName: 'Logout',
           lastName: 'Test',
