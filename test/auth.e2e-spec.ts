@@ -105,7 +105,7 @@ describe('AuthController (e2e)', () => {
     });
 
     it('should respect rate limiting (5 requests per minute)', async () => {
-      const requests = [];
+      const requests: Promise<any>[] = [];
 
       // Make 6 requests rapidly
       for (let i = 0; i < 6; i++) {
@@ -124,7 +124,7 @@ describe('AuthController (e2e)', () => {
       const responses = await Promise.all(requests);
 
       // Last request should be rate limited
-      const rateLimitedResponse = responses.find((res) => res.status === 429);
+      const rateLimitedResponse = responses.find((res: any) => res.status === 429);
       expect(rateLimitedResponse).toBeDefined();
     }, 10000);
   });

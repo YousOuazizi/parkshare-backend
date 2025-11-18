@@ -5,6 +5,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
+import { VerificationService } from '../verification/verification.service';
 import { User } from '../users/entities/user.entity';
 import { UnauthorizedException, ConflictException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
@@ -37,6 +38,8 @@ describe('AuthService', () => {
     findByEmail: jest.fn(),
     create: jest.fn(),
     findOne: jest.fn(),
+    setRefreshToken: jest.fn(),
+    updateRefreshToken: jest.fn(),
   };
 
   const mockJwtService = {
@@ -56,6 +59,13 @@ describe('AuthService', () => {
     }),
   };
 
+  const mockVerificationService = {
+    sendVerificationEmail: jest.fn(),
+    verifyEmail: jest.fn(),
+    sendPasswordResetEmail: jest.fn(),
+    verifyPasswordResetToken: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -71,6 +81,10 @@ describe('AuthService', () => {
         {
           provide: ConfigService,
           useValue: mockConfigService,
+        },
+        {
+          provide: VerificationService,
+          useValue: mockVerificationService,
         },
         {
           provide: getRepositoryToken(User),

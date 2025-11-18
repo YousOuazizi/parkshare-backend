@@ -150,7 +150,7 @@ jobs:
         run: npm ci --prefer-offline --no-audit --legacy-peer-deps
 
       - name: Run npm audit
-        run: npm audit --audit-level=moderate
+        run: npm audit --audit-level=high
 
       - name: Generate audit report
         run: |
