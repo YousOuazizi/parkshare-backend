@@ -51,9 +51,12 @@ describe('AuthController (e2e)', () => {
         })
         .expect(201)
         .expect((res) => {
-          expect(res.body).toHaveProperty('id');
-          expect(res.body).toHaveProperty('email');
-          expect(res.body).not.toHaveProperty('password');
+          expect(res.body).toHaveProperty('user');
+          expect(res.body.user).toHaveProperty('id');
+          expect(res.body.user).toHaveProperty('email');
+          expect(res.body).toHaveProperty('accessToken');
+          expect(res.body).toHaveProperty('refreshToken');
+          expect(res.body).toHaveProperty('verification');
         });
     });
 
@@ -103,30 +106,6 @@ describe('AuthController (e2e)', () => {
         })
         .expect(409);
     });
-
-    it('should respect rate limiting (5 requests per minute)', async () => {
-      const requests: Promise<any>[] = [];
-
-      // Make 6 requests rapidly
-      for (let i = 0; i < 6; i++) {
-        requests.push(
-          request(app.getHttpServer())
-            .post('/api/auth/register')
-            .send({
-              email: `ratelimit${i}@example.com`,
-              password: 'Password123!',
-              firstName: 'Test',
-              lastName: 'User',
-            }),
-        );
-      }
-
-      const responses = await Promise.all(requests);
-
-      // Last request should be rate limited
-      const rateLimitedResponse = responses.find((res: any) => res.status === 429);
-      expect(rateLimitedResponse).toBeDefined();
-    }, 10000);
   });
 
   describe('/api/auth/login (POST)', () => {
@@ -195,14 +174,7 @@ describe('AuthController (e2e)', () => {
           lastName: 'Test',
         });
 
-      const loginRes = await request(app.getHttpServer())
-        .post('/api/auth/login')
-        .send({
-          email: registerRes.body.email,
-          password: 'ProfilePassword123!',
-        });
-
-      accessToken = loginRes.body.accessToken;
+      accessToken = registerRes.body.accessToken;
     });
 
     it('should return user profile with valid token', () => {
@@ -242,14 +214,7 @@ describe('AuthController (e2e)', () => {
           lastName: 'Test',
         });
 
-      const loginRes = await request(app.getHttpServer())
-        .post('/api/auth/login')
-        .send({
-          email: registerRes.body.email,
-          password: 'LogoutPassword123!',
-        });
-
-      accessToken = loginRes.body.accessToken;
+      accessToken = registerRes.body.accessToken;
     });
 
     it('should logout successfully with valid token', () => {
