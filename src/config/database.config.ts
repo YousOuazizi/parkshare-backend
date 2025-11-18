@@ -4,12 +4,13 @@ import { ConfigService } from '@nestjs/config';
 export const getDatabaseConfig = (
   configService: ConfigService,
 ): TypeOrmModuleOptions => {
+  const environment = configService.get<string>('environment');
   return {
     type: 'postgres',
     url: configService.get<string>('database.url'),
     entities: [__dirname + '/../**/*.entity{.ts,.js}'],
-    synchronize: configService.get<string>('environment') === 'development',
-    logging: configService.get<string>('environment') === 'development',
+    synchronize: ['development', 'test'].includes(environment),
+    logging: environment === 'development',
     migrations: [__dirname + '/../database/migrations/**/*{.ts,.js}'],
     // installExtensions: false, // Désactiver PostGIS temporairement
   };
