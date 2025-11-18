@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 export const getDatabaseConfig = (
   configService: ConfigService,
 ): TypeOrmModuleOptions => {
-  const environment = configService.get<string>('environment');
+  const environment = configService.get<string>('environment', 'production');
   return {
     type: 'postgres',
     url: configService.get<string>('database.url'),
