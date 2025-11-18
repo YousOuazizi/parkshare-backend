@@ -44,6 +44,7 @@ describe('AuthService', () => {
 
   const mockJwtService = {
     sign: jest.fn(),
+    signAsync: jest.fn(),
     verify: jest.fn(),
   };
 
@@ -61,9 +62,11 @@ describe('AuthService', () => {
 
   const mockVerificationService = {
     sendVerificationEmail: jest.fn(),
+    sendEmailVerification: jest.fn(),
     verifyEmail: jest.fn(),
     sendPasswordResetEmail: jest.fn(),
     verifyPasswordResetToken: jest.fn(),
+    getVerificationInfo: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -97,6 +100,18 @@ describe('AuthService', () => {
     usersService = module.get<UsersService>(UsersService);
     jwtService = module.get<JwtService>(JwtService);
     userRepository = module.get<Repository<User>>(getRepositoryToken(User));
+
+    // Setup default mock implementations
+    mockJwtService.signAsync.mockResolvedValue('mock-jwt-token');
+    mockJwtService.sign.mockReturnValue('mock-jwt-token');
+    mockVerificationService.getVerificationInfo.mockResolvedValue({
+      userId: mockUser.id,
+      level: 1,
+      isEmailVerified: true,
+      isPhoneVerified: false,
+      isIdVerified: false,
+      isAddressVerified: false,
+    });
   });
 
   afterEach(() => {
@@ -181,27 +196,27 @@ describe('AuthService', () => {
 
   describe('login', () => {
     it('should return access and refresh tokens', async () => {
-      mockJwtService.sign.mockReturnValue('mock-jwt-token');
-      mockUserRepository.update.mockResolvedValue({ affected: 1 });
+      mockUsersService.setRefreshToken.mockResolvedValue(undefined);
 
       const result = await service.login(mockUser as any);
 
       expect(result).toHaveProperty('accessToken');
       expect(result).toHaveProperty('refreshToken');
       expect(result).toHaveProperty('user');
-      expect(mockJwtService.sign).toHaveBeenCalled();
+      expect(mockJwtService.signAsync).toHaveBeenCalled();
     });
   });
 
   describe('logout', () => {
     it('should clear refresh token', async () => {
-      mockUserRepository.update.mockResolvedValue({ affected: 1 });
+      mockUsersService.setRefreshToken.mockResolvedValue(undefined);
 
       await service.logout(mockUser.id);
 
-      expect(mockUserRepository.update).toHaveBeenCalledWith(mockUser.id, {
-        refreshToken: null,
-      });
+      expect(mockUsersService.setRefreshToken).toHaveBeenCalledWith(
+        mockUser.id,
+        null,
+      );
     });
   });
 });
