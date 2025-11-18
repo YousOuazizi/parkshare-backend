@@ -109,27 +109,30 @@ describe('AuthController (e2e)', () => {
   });
 
   describe('/api/auth/login (POST)', () => {
-    const testUser = {
-      email: `logintest${Date.now()}@example.com`,
-      password: 'LoginPassword123!',
-    };
+    it('should login with correct credentials', async () => {
+      const email = `logintest${Date.now()}@example.com`;
+      const password = 'LoginPassword123!';
 
-    beforeAll(async () => {
       // Create a test user
-      await request(app.getHttpServer()).post('/api/auth/register').send({
-        email: testUser.email,
-        password: testUser.password,
-        firstName: 'Login',
-        lastName: 'Test',
-      });
-    });
+      const registerRes = await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .send({
+          email,
+          password,
+          firstName: 'Login',
+          lastName: 'Test',
+        })
+        .expect(201);
 
-    it('should login with correct credentials', () => {
+      // Verify registration succeeded
+      expect(registerRes.body.user).toHaveProperty('email', email);
+
+      // Login with the created user
       return request(app.getHttpServer())
         .post('/api/auth/login')
         .send({
-          email: testUser.email,
-          password: testUser.password,
+          email,
+          password,
         })
         .expect(201)
         .expect((res) => {
@@ -139,11 +142,25 @@ describe('AuthController (e2e)', () => {
         });
     });
 
-    it('should return 401 for incorrect password', () => {
+    it('should return 401 for incorrect password', async () => {
+      const email = `wrongpwd${Date.now()}@example.com`;
+
+      // Create user first
+      await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .send({
+          email,
+          password: 'CorrectPassword123!',
+          firstName: 'Test',
+          lastName: 'User',
+        })
+        .expect(201);
+
+      // Try to login with wrong password
       return request(app.getHttpServer())
         .post('/api/auth/login')
         .send({
-          email: testUser.email,
+          email,
           password: 'WrongPassword123!',
         })
         .expect(401);
@@ -161,10 +178,8 @@ describe('AuthController (e2e)', () => {
   });
 
   describe('/api/auth/profile (GET)', () => {
-    let accessToken: string;
-
-    beforeAll(async () => {
-      // Register and login
+    it('should return user profile with valid token', async () => {
+      // Register and get token
       const registerRes = await request(app.getHttpServer())
         .post('/api/auth/register')
         .send({
@@ -172,12 +187,13 @@ describe('AuthController (e2e)', () => {
           password: 'ProfilePassword123!',
           firstName: 'Profile',
           lastName: 'Test',
-        });
+        })
+        .expect(201);
 
-      accessToken = registerRes.body.accessToken;
-    });
+      const accessToken = registerRes.body.accessToken;
+      expect(accessToken).toBeDefined();
 
-    it('should return user profile with valid token', () => {
+      // Get profile with token
       return request(app.getHttpServer())
         .get('/api/auth/profile')
         .set('Authorization', `Bearer ${accessToken}`)
@@ -202,9 +218,7 @@ describe('AuthController (e2e)', () => {
   });
 
   describe('/api/auth/logout (POST)', () => {
-    let accessToken: string;
-
-    beforeEach(async () => {
+    it('should logout successfully with valid token', async () => {
       const registerRes = await request(app.getHttpServer())
         .post('/api/auth/register')
         .send({
@@ -212,12 +226,12 @@ describe('AuthController (e2e)', () => {
           password: 'LogoutPassword123!',
           firstName: 'Logout',
           lastName: 'Test',
-        });
+        })
+        .expect(201);
 
-      accessToken = registerRes.body.accessToken;
-    });
+      const accessToken = registerRes.body.accessToken;
+      expect(accessToken).toBeDefined();
 
-    it('should logout successfully with valid token', () => {
       return request(app.getHttpServer())
         .post('/api/auth/logout')
         .set('Authorization', `Bearer ${accessToken}`)
