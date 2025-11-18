@@ -53,11 +53,6 @@ describe('AuthController (e2e)', () => {
           firstName: 'Test',
           lastName: 'User',
         })
-        .expect((res) => {
-          if (res.status !== 201) {
-            console.error('Registration failed:', res.status, res.body);
-          }
-        })
         .expect(201)
         .expect((res) => {
           expect(res.body).toHaveProperty('user');
